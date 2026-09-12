@@ -40,8 +40,16 @@ public sealed class ActiveDuty
     public List<string> RareLoot { get; set; } = [];
 }
 
+/// <summary>Read-only snapshot of the currently active duty, for the compact window.</summary>
 public readonly struct ActiveDutySnapshot
 {
+    // Explicit constructor required (CS8983): a readonly struct with property
+    // initializers must declare one, otherwise the default parameterless
+    // constructor would not run those initializers.
+    public ActiveDutySnapshot()
+    {
+    }
+
     public bool IsActive { get; init; }
     public string DutyName { get; init; } = "";
     public string Job { get; init; } = "";
@@ -52,6 +60,10 @@ public readonly struct ActiveDutySnapshot
 /// <summary>Read-only snapshot of an in-progress Duty Finder queue, for the compact window.</summary>
 public readonly struct QueueSnapshot
 {
+    public QueueSnapshot()
+    {
+    }
+
     public bool IsQueuing { get; init; }
     public DateTimeOffset QueuedAt { get; init; }
     public string Job { get; init; } = "";
