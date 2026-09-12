@@ -6,6 +6,12 @@
 # - repo.json updated with the new version + download link and committed back
 #   to main (Dalamud's custom-repo loader reads repo.json straight off the
 #   raw GitHub URL, so it has to live on the branch, not just in the release).
+#
+# IMPORTANT: Dalamud.NET.Sdk does NOT fetch Dalamud's own binaries via NuGet -
+# it expects a real Dalamud install at ~/.xlcore/dalamud/Hooks/dev/ (the same
+# path XIVLauncher uses on Linux). On your own machine that already exists
+# because XIVLauncher is installed; on a bare CI runner it does not, so we
+# download and unpack it explicitly before building.
 
 name: Release
 
@@ -31,6 +37,12 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+
+      - name: Download Dalamud
+        run: |
+          mkdir -p ~/.xlcore/dalamud/Hooks/dev
+          curl -sL https://goatcorp.github.io/dalamud-distrib/latest.zip -o dalamud.zip
+          unzip -q dalamud.zip -d ~/.xlcore/dalamud/Hooks/dev
 
       - name: Compute version
         id: version

@@ -1,3 +1,7 @@
+# PR check build - same Dalamud-download fix as release.yml, since
+# Dalamud.NET.Sdk needs real binaries at ~/.xlcore/dalamud/Hooks/dev/ and the
+# CI runner has no XIVLauncher installed to provide them.
+
 name: Build (PR check)
 
 on:
@@ -14,6 +18,12 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+
+      - name: Download Dalamud
+        run: |
+          mkdir -p ~/.xlcore/dalamud/Hooks/dev
+          curl -sL https://goatcorp.github.io/dalamud-distrib/latest.zip -o dalamud.zip
+          unzip -q dalamud.zip -d ~/.xlcore/dalamud/Hooks/dev
 
       - name: Restore
         run: dotnet restore DutyLedgerPlugin.csproj
