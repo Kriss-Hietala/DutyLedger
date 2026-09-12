@@ -242,7 +242,7 @@ public sealed class SettingsWindow : Window
         }
 
         ImGui.PushStyleColor(ImGuiCol.Border, danger);
-        ImGui.BeginChild($"##danger_{buttonLabel}", new Vector2(0, 90), ImGuiChildFlags.Borders | ImGuiChildFlags.AutoResizeY);
+        ImGui.BeginChild($"##danger_{buttonLabel}", new Vector2(0, 90), true);
 
         ImGui.TextColored(danger, warningText);
         ImGui.TextColored(danger, "This cannot be undone.");
