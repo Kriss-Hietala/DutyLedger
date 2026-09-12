@@ -1,0 +1,22 @@
+name: Build (PR check)
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore DutyLedgerPlugin.csproj
+
+      - name: Build
+        run: dotnet build DutyLedgerPlugin.csproj -c Release --no-restore --no-logo

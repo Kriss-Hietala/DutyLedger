@@ -1,0 +1,83 @@
+# Mirrors the SpiritbondTracker release scheme:
+# - version = 1.0.<github.run_number>.0
+# - dotnet build -c Release
+# - publish.zip containing exactly DutyLedgerPlugin.dll / .deps.json / .json
+# - GitHub Release with publish.zip attached
+# - repo.json updated with the new version + download link and committed back
+#   to main (Dalamud's custom-repo loader reads repo.json straight off the
+#   raw GitHub URL, so it has to live on the branch, not just in the release).
+
+name: Release
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - "README.md"
+      - ".gitignore"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Compute version
+        id: version
+        run: echo "version=1.0.${{ github.run_number }}.0" >> "$GITHUB_OUTPUT"
+
+      - name: Update manifest version
+        run: |
+          jq --arg v "${{ steps.version.outputs.version }}" '.AssemblyVersion = $v' \
+            DutyLedgerPlugin.json > DutyLedgerPlugin.json.tmp
+          mv DutyLedgerPlugin.json.tmp DutyLedgerPlugin.json
+
+          sed -i "s#<Version>.*</Version>#<Version>${{ steps.version.outputs.version }}</Version>#" \
+            DutyLedgerPlugin.csproj
+
+      - name: Restore
+        run: dotnet restore DutyLedgerPlugin.csproj
+
+      - name: Build
+        run: dotnet build DutyLedgerPlugin.csproj -c Release --no-restore --no-logo
+
+      - name: Package publish.zip
+        run: |
+          out_dir=$(dirname "$(find bin/Release -name 'DutyLedgerPlugin.dll' | head -n1)")
+          cd "$out_dir"
+          zip -j "$GITHUB_WORKSPACE/publish.zip" \
+            DutyLedgerPlugin.dll DutyLedgerPlugin.deps.json DutyLedgerPlugin.json
+
+      - name: Update repo.json
+        run: |
+          url="https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/publish.zip"
+          jq --arg v "${{ steps.version.outputs.version }}" --arg url "$url" \
+            '(.[0].AssemblyVersion) = $v | (.[0].DownloadLinkInstall) = $url | (.[0].DownloadLinkUpdate) = $url' \
+            repo.json > repo.json.tmp
+          mv repo.json.tmp repo.json
+
+      - name: Commit manifest updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add DutyLedgerPlugin.json DutyLedgerPlugin.csproj repo.json
+          git commit -m "chore: release v${{ steps.version.outputs.version }}" || echo "Nothing to commit"
+          git push
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          files: publish.zip
+          generate_release_notes: true
