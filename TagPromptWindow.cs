@@ -1,12 +1,17 @@
 // TagPromptWindow.cs
 // Standalone roulette-tagging prompt - its own window (not a nested popup) so
 // it still shows up while the main window is collapsed or hidden by compact
-// mode. As of the ContentFinderCondition-flag detection in Plugin.cs, this
-// window is now only opened when a duty is a member of MORE THAN ONE
-// roulette pool at once (genuinely ambiguous) - unambiguous and non-roulette
-// duties are tagged automatically without ever showing this popup. The button
-// list shows only the roulette categories that are actually possible for
-// this specific duty, not the full list of 10.
+// mode. Only opened when a duty is a member of MORE THAN ONE roulette pool
+// at once (genuinely ambiguous) - unambiguous and non-roulette duties are
+// tagged automatically without ever showing this popup. The button list
+// shows only the roulette categories that are actually possible for this
+// specific duty, not the full list of 10.
+//
+// "None"/"Skip" both mark the entry as "Ambiguous (untagged)" rather than
+// leaving RouletteTag empty - that keeps it visually and statistically
+// distinct from a duty that was never in any roulette pool at all (which
+// shows up as "Direct queue" instead). Collapsing both into an empty string
+// used to make them indistinguishable in the category breakdown chart.
 
 using System.Collections.Generic;
 using Dalamud.Bindings.ImGui;
@@ -16,6 +21,8 @@ namespace DutyLedger;
 
 public sealed class TagPromptWindow : Window
 {
+    private const string AmbiguousUntagged = "Ambiguous (untagged)";
+
     private static readonly string[] FallbackTags =
     [
         "Expert", "Level Cap Dungeons", "High-level Dungeons", "Leveling",
@@ -60,6 +67,9 @@ public sealed class TagPromptWindow : Window
         ImGui.Spacing();
         if (ImGui.Button("Skip"))
         {
+            entry.RouletteTag = AmbiguousUntagged;
+            entry.RouletteTagAuto = false;
+            this.plugin.Save();
             this.PendingEntry = null;
             this.IsOpen = false;
         }
@@ -75,7 +85,7 @@ public sealed class TagPromptWindow : Window
 
             if (ImGui.Button(tag))
             {
-                entry.RouletteTag = tag == "None" ? "" : tag;
+                entry.RouletteTag = tag == "None" ? AmbiguousUntagged : tag;
                 entry.RouletteTagAuto = false;
                 this.plugin.Save();
                 this.PendingEntry = null;
