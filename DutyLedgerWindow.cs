@@ -1,8 +1,9 @@
 // DutyLedgerWindow.cs
 // ImGui window for the DutyLedger plugin: cap warnings, stats, averages per
 // duty, queue-time averages, filterable table with bonus/loot badges, CSV
-// export and a weekly bar chart (ImPlot). Averages/chart/queue data are
-// cached and only recomputed when their respective list counts change.
+// export and a weekly bar chart (ImPlot) split into Clear/Wipe groups.
+// Averages/chart/queue data are cached and only recomputed when their
+// respective list counts change.
 
 using System;
 using System.Collections.Generic;
@@ -33,7 +34,8 @@ public sealed class DutyLedgerWindow : Window
 
     private int cachedEntryCount = -1;
     private List<AverageRow> cachedAverages = [];
-    private double[] cachedWeeklyCounts = new double[7];
+    private double[] cachedClearCounts = new double[7];
+    private double[] cachedWipeCounts = new double[7];
 
     private int cachedQueueCount = -1;
     private List<QueueAverageRow> cachedQueueAverages = [];
@@ -92,10 +94,18 @@ public sealed class DutyLedgerWindow : Window
                 .OrderByDescending(x => x.Runs)
                 .ToList();
 
-            var counts = new double[7];
+            var clearCounts = new double[7];
+            var wipeCounts = new double[7];
             foreach (var e in this.config.Entries)
-                counts[((int)e.StartedAt.LocalDateTime.DayOfWeek + 6) % 7]++;
-            this.cachedWeeklyCounts = counts;
+            {
+                var dow = ((int)e.StartedAt.LocalDateTime.DayOfWeek + 6) % 7;
+                if (e.Result == DutyResult.Clear)
+                    clearCounts[dow]++;
+                else
+                    wipeCounts[dow]++;
+            }
+            this.cachedClearCounts = clearCounts;
+            this.cachedWipeCounts = wipeCounts;
         }
 
         if (this.config.QueueWaits.Count != this.cachedQueueCount)
@@ -181,31 +191,42 @@ public sealed class DutyLedgerWindow : Window
             this.DrawWeeklyChart();
     }
 
+    /// <summary>
+    /// Grouped bar chart: Clear (green) vs Wipe/Abandon (red) counts per
+    /// weekday, instead of one generic aggregated "Duties" series - the
+    /// legend now actually distinguishes something meaningful.
+    /// </summary>
     private void DrawWeeklyChart()
     {
         if (this.config.Entries.Count == 0)
             return;
 
-        var counts = this.cachedWeeklyCounts;
-        var dayLabels = new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
-        var positions = Enumerable.Range(0, 7).Select(i => (double)i).ToArray();
+        var clearCounts = this.cachedClearCounts;
+        var wipeCounts = this.cachedWipeCounts;
 
-        var maxCount = Math.Max(1, (int)Math.Ceiling(counts.Max()));
-        var yTicks = Enumerable.Range(0, maxCount + 1).Select(i => (double)i).ToArray();
+        var dayLabels = new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+        var positionsClear = Enumerable.Range(0, 7).Select(i => (double)i - 0.15).ToArray();
+        var positionsWipe = Enumerable.Range(0, 7).Select(i => (double)i + 0.15).ToArray();
+
+        var maxBar = Math.Max(1, (int)Math.Ceiling(Math.Max(clearCounts.Max(), wipeCounts.Max())));
+        var yTicks = Enumerable.Range(0, maxBar + 1).Select(i => (double)i).ToArray();
         var yLabels = yTicks.Select(v => v.ToString("0")).ToArray();
 
         ImGui.Spacing();
-        ImGui.TextColored(this.ColorAccent, "Duties per day of the week:");
+        ImGui.TextColored(this.ColorAccent, "Duties per day of the week (Clear vs Wipe/Abandon):");
 
-        if (ImPlot.BeginPlot("##weekly_duty_chart", new Vector2(-1, this.config.ChartHeight), ImPlotFlags.NoLegend))
+        if (ImPlot.BeginPlot("##weekly_duty_chart", new Vector2(-1, this.config.ChartHeight)))
         {
             ImPlot.SetupAxes(string.Empty, string.Empty);
             ImPlot.SetupAxisTicks(ImAxis.X1, 0, 6, 7, dayLabels);
-            ImPlot.SetupAxisTicks(ImAxis.Y1, 0, maxCount, maxCount + 1, yLabels);
-            ImPlot.SetupAxisLimits(ImAxis.Y1, 0, maxCount + 0.5, ImPlotCond.Always);
+            ImPlot.SetupAxisTicks(ImAxis.Y1, 0, maxBar, maxBar + 1, yLabels);
+            ImPlot.SetupAxisLimits(ImAxis.Y1, 0, maxBar + 0.5, ImPlotCond.Always);
 
-            ImPlot.SetNextFillStyle(this.ColorAccent);
-            ImPlot.PlotBars("Duties", ref positions[0], ref counts[0], counts.Length, 0.6);
+            ImPlot.SetNextFillStyle(this.ColorClear);
+            ImPlot.PlotBars("Clear", ref positionsClear[0], ref clearCounts[0], clearCounts.Length, 0.3);
+
+            ImPlot.SetNextFillStyle(this.ColorAbandon);
+            ImPlot.PlotBars("Wipe/Abandon", ref positionsWipe[0], ref wipeCounts[0], wipeCounts.Length, 0.3);
 
             ImPlot.EndPlot();
         }
