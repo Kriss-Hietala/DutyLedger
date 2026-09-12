@@ -1,9 +1,10 @@
 // DutyLedgerWindow.cs
 // ImGui window for the DutyLedger plugin: cap warnings, stats, averages per
 // duty, queue-time averages, filterable table with bonus/loot badges, CSV
-// export, a simple daily activity chart, and a roulette-category breakdown
-// chart (ImPlot). Averages/chart/queue data are cached and only recomputed
-// when their respective list counts change.
+// export, an independently-collapsible daily activity chart, and an
+// independently-collapsible roulette-category breakdown chart (ImPlot).
+// Averages/chart/queue data are cached and only recomputed when their
+// respective list counts change.
 
 using System;
 using System.Collections.Generic;
@@ -187,18 +188,26 @@ public sealed class DutyLedgerWindow : Window
             ? "no entries yet"
             : $"{weekEntries.Count} duties  \u2022  most common: {mostCommonThisWeek.Key} ({mostCommonThisWeek.Count()}x)");
 
-        if (this.config.ShowWeeklyChart && !this.config.EcoMode)
-        {
+        if (!this.config.ShowWeeklyChart || this.config.EcoMode)
+            return;
+
+        ImGui.Spacing();
+
+        if (ImGui.CollapsingHeader("Duties per day of the week", ImGuiTreeNodeFlags.DefaultOpen))
             this.DrawDailyChart();
+
+        if (ImGui.CollapsingHeader("Instances by roulette category", ImGuiTreeNodeFlags.DefaultOpen))
             this.DrawCategoryChart();
-        }
     }
 
     /// <summary>Simple total duty count per weekday - one aggregate series, which is fine on its own (this chart is about activity volume, not outcome).</summary>
     private void DrawDailyChart()
     {
         if (this.config.Entries.Count == 0)
+        {
+            ImGui.TextDisabled("No data yet.");
             return;
+        }
 
         var counts = this.cachedDailyCounts;
         var dayLabels = new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
@@ -207,9 +216,6 @@ public sealed class DutyLedgerWindow : Window
         var maxCount = Math.Max(1, (int)Math.Ceiling(counts.Max()));
         var yTicks = Enumerable.Range(0, maxCount + 1).Select(i => (double)i).ToArray();
         var yLabels = yTicks.Select(v => v.ToString("0")).ToArray();
-
-        ImGui.Spacing();
-        ImGui.TextColored(this.ColorAccent, "Duties per day of the week:");
 
         if (ImPlot.BeginPlot("##daily_duty_chart", new Vector2(-1, this.config.ChartHeight), ImPlotFlags.NoLegend))
         {
@@ -226,15 +232,19 @@ public sealed class DutyLedgerWindow : Window
     }
 
     /// <summary>
-    /// Bar per roulette category (plus "Direct queue" for non-roulette runs),
-    /// sorted by frequency. This is the breakdown that actually matters for
-    /// casual play, where Clear/Wipe is nearly always Clear and therefore
-    /// tells you very little.
+    /// Bar per roulette category (plus "Direct queue" for non-roulette runs
+    /// and "Ambiguous (untagged)" for skipped multi-candidate duties), sorted
+    /// by frequency. This is the breakdown that actually matters for casual
+    /// play, where Clear/Wipe is nearly always Clear and therefore tells you
+    /// very little.
     /// </summary>
     private void DrawCategoryChart()
     {
         if (this.cachedCategoryCounts.Count == 0)
+        {
+            ImGui.TextDisabled("No data yet.");
             return;
+        }
 
         var positions = Enumerable.Range(0, this.cachedCategoryCounts.Count).Select(i => (double)i).ToArray();
         var counts = this.cachedCategoryCounts.Select(c => (double)c.Count).ToArray();
@@ -243,9 +253,6 @@ public sealed class DutyLedgerWindow : Window
         var maxCount = Math.Max(1, (int)Math.Ceiling(counts.Max()));
         var yTicks = Enumerable.Range(0, maxCount + 1).Select(i => (double)i).ToArray();
         var yLabels = yTicks.Select(v => v.ToString("0")).ToArray();
-
-        ImGui.Spacing();
-        ImGui.TextColored(this.ColorAccent, "Instances by roulette category:");
 
         if (ImPlot.BeginPlot("##category_chart", new Vector2(-1, this.config.ChartHeight), ImPlotFlags.NoLegend))
         {
