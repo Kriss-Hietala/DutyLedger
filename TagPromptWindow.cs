@@ -7,11 +7,15 @@
 // shows only the roulette categories that are actually possible for this
 // specific duty, not the full list of 10.
 //
-// "None"/"Skip" both mark the entry as "Ambiguous (untagged)" rather than
-// leaving RouletteTag empty - that keeps it visually and statistically
-// distinct from a duty that was never in any roulette pool at all (which
-// shows up as "Direct queue" instead). Collapsing both into an empty string
-// used to make them indistinguishable in the category breakdown chart.
+// "Skip" tags the entry as "Ambiguous (untagged)" (kept distinct from an
+// untouched empty RouletteTag, which the stats views show as "Direct
+// queue") and closes. "Close" is a separate, purely dismissive action that
+// leaves the entry completely untouched - it mirrors exactly what clicking
+// the title bar's own (X) already does. Both exist as real in-content
+// buttons because the title bar (X) is a raw ImGui draw command that
+// gamepad navigation cannot focus, so a pad-only user needs an actual
+// focusable widget to get out of this prompt without necessarily having to
+// pick a roulette.
 
 using System.Collections.Generic;
 using Dalamud.Bindings.ImGui;
@@ -44,10 +48,10 @@ public sealed class TagPromptWindow : Window
         this.config = config;
     }
 
-    /// <summary>Restricts the buttons shown to the given roulette names (plus a "None" override), instead of the full list of 10.</summary>
+    /// <summary>Restricts the buttons shown to the given roulette names, instead of the full list of 10.</summary>
     internal void SetCandidates(IReadOnlyList<string> candidates)
     {
-        this.candidateTags = candidates.Count > 0 ? [.. candidates, "None"] : [.. FallbackTags, "None"];
+        this.candidateTags = candidates.Count > 0 ? [.. candidates] : FallbackTags;
     }
 
     public override void Draw()
@@ -65,7 +69,7 @@ public sealed class TagPromptWindow : Window
         this.DrawWrappedTagButtons(entry);
 
         ImGui.Spacing();
-        if (ImGui.Button("Skip"))
+        if (ImGui.Button("Skip (mark as ambiguous)"))
         {
             entry.RouletteTag = AmbiguousUntagged;
             entry.RouletteTagAuto = false;
@@ -73,6 +77,10 @@ public sealed class TagPromptWindow : Window
             this.PendingEntry = null;
             this.IsOpen = false;
         }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Close"))
+            this.IsOpen = false;
     }
 
     private void DrawWrappedTagButtons(DutyEntry entry)
@@ -85,7 +93,7 @@ public sealed class TagPromptWindow : Window
 
             if (ImGui.Button(tag))
             {
-                entry.RouletteTag = tag == "None" ? AmbiguousUntagged : tag;
+                entry.RouletteTag = tag;
                 entry.RouletteTagAuto = false;
                 this.plugin.Save();
                 this.PendingEntry = null;

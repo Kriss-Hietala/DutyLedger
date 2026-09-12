@@ -3,6 +3,11 @@
 // duty, queue-time averages, filterable table with bonus/loot badges, CSV
 // export, an independently-collapsible daily activity chart, and an
 // independently-collapsible roulette-category breakdown chart (ImPlot).
+// Both charts use a dynamic Y-axis tick step (1/2/5/10/20/25/50/...) picked
+// to keep roughly 4-8 labeled ticks regardless of how tall the tallest bar
+// is, instead of always labeling every single integer - a fixed 0-1-2-3...
+// step became an unreadable wall of overlapping labels once any single day
+// or category climbed into the double digits.
 // Averages/chart/queue data are cached and only recomputed when their
 // respective list counts change.
 
@@ -26,6 +31,9 @@ public sealed class DutyLedgerWindow : Window
         string Role, string RouletteTag, int Count, TimeSpan AvgWait, TimeSpan MinWait, TimeSpan MaxWait);
 
     private readonly record struct CategoryRow(string Category, int Count);
+
+    /// <summary>"Nice" step sizes tried in order until one keeps the tick count within a readable range for the given max value.</summary>
+    private static readonly int[] NiceSteps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000];
 
     private readonly Plugin plugin;
     private readonly Configuration config;
@@ -200,6 +208,33 @@ public sealed class DutyLedgerWindow : Window
             this.DrawCategoryChart();
     }
 
+    /// <summary>Picks a "nice" Y-axis step (1/2/5/10/20/25/50/...) so the tallest bar produces roughly 4-8 labeled ticks instead of one tick per integer.</summary>
+    private static int ComputeNiceStep(int maxValue, int targetTicks = 6)
+    {
+        if (maxValue <= 0)
+            return 1;
+
+        var rawStep = (double)maxValue / targetTicks;
+        foreach (var step in NiceSteps)
+        {
+            if (step >= rawStep)
+                return step;
+        }
+
+        return NiceSteps[^1];
+    }
+
+    private static (double[] Ticks, string[] Labels) BuildYAxisTicks(int maxValue)
+    {
+        var step = ComputeNiceStep(maxValue);
+        var topTick = ((maxValue / step) + 1) * step;
+
+        var tickCount = (topTick / step) + 1;
+        var ticks = Enumerable.Range(0, tickCount).Select(i => (double)(i * step)).ToArray();
+        var labels = ticks.Select(v => v.ToString("0")).ToArray();
+        return (ticks, labels);
+    }
+
     /// <summary>Simple total duty count per weekday - one aggregate series, which is fine on its own (this chart is about activity volume, not outcome).</summary>
     private void DrawDailyChart()
     {
@@ -214,15 +249,15 @@ public sealed class DutyLedgerWindow : Window
         var positions = Enumerable.Range(0, 7).Select(i => (double)i).ToArray();
 
         var maxCount = Math.Max(1, (int)Math.Ceiling(counts.Max()));
-        var yTicks = Enumerable.Range(0, maxCount + 1).Select(i => (double)i).ToArray();
-        var yLabels = yTicks.Select(v => v.ToString("0")).ToArray();
+        var (yTicks, yLabels) = BuildYAxisTicks(maxCount);
+        var yTop = yTicks[^1];
 
         if (ImPlot.BeginPlot("##daily_duty_chart", new Vector2(-1, this.config.ChartHeight), ImPlotFlags.NoLegend))
         {
             ImPlot.SetupAxes(string.Empty, string.Empty);
             ImPlot.SetupAxisTicks(ImAxis.X1, 0, 6, 7, dayLabels);
-            ImPlot.SetupAxisTicks(ImAxis.Y1, 0, maxCount, maxCount + 1, yLabels);
-            ImPlot.SetupAxisLimits(ImAxis.Y1, 0, maxCount + 0.5, ImPlotCond.Always);
+            ImPlot.SetupAxisTicks(ImAxis.Y1, 0, yTop, yTicks.Length, yLabels);
+            ImPlot.SetupAxisLimits(ImAxis.Y1, 0, yTop, ImPlotCond.Always);
 
             ImPlot.SetNextFillStyle(this.ColorAccent);
             ImPlot.PlotBars("Duties", ref positions[0], ref counts[0], counts.Length, 0.6);
@@ -251,15 +286,15 @@ public sealed class DutyLedgerWindow : Window
         var labels = this.cachedCategoryCounts.Select(c => c.Category).ToArray();
 
         var maxCount = Math.Max(1, (int)Math.Ceiling(counts.Max()));
-        var yTicks = Enumerable.Range(0, maxCount + 1).Select(i => (double)i).ToArray();
-        var yLabels = yTicks.Select(v => v.ToString("0")).ToArray();
+        var (yTicks, yLabels) = BuildYAxisTicks(maxCount);
+        var yTop = yTicks[^1];
 
         if (ImPlot.BeginPlot("##category_chart", new Vector2(-1, this.config.ChartHeight), ImPlotFlags.NoLegend))
         {
             ImPlot.SetupAxes(string.Empty, string.Empty);
             ImPlot.SetupAxisTicks(ImAxis.X1, 0, this.cachedCategoryCounts.Count - 1, this.cachedCategoryCounts.Count, labels);
-            ImPlot.SetupAxisTicks(ImAxis.Y1, 0, maxCount, maxCount + 1, yLabels);
-            ImPlot.SetupAxisLimits(ImAxis.Y1, 0, maxCount + 0.5, ImPlotCond.Always);
+            ImPlot.SetupAxisTicks(ImAxis.Y1, 0, yTop, yTicks.Length, yLabels);
+            ImPlot.SetupAxisLimits(ImAxis.Y1, 0, yTop, ImPlotCond.Always);
 
             ImPlot.SetNextFillStyle(this.ColorGold);
             ImPlot.PlotBars("Instances", ref positions[0], ref counts[0], counts.Length, 0.6);

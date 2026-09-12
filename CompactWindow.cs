@@ -3,6 +3,11 @@
 // progress OR the current Duty Finder queue elapsed time, a one-line summary
 // of the last completed duty, today's count, and a compact tomestone-cap
 // warning if applicable.
+//
+// Includes an explicit in-content "Close" button alongside "Open full log"
+// and "Settings" - the title bar's own (X) is a raw ImGui draw command that
+// gamepad navigation (ImGuiConfigFlags.NavEnableGamepad) cannot focus, so a
+// pad-only user would otherwise have no way to dismiss this window at all.
 
 using System;
 using System.Linq;
@@ -91,6 +96,10 @@ public sealed class CompactWindow : Window
         ImGui.SameLine();
         if (ImGui.SmallButton("Settings"))
             this.plugin.ShowSettingsWindow();
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Close"))
+            this.IsOpen = false;
     }
 
     private static string Format(TimeSpan time) => time.TotalHours >= 1
