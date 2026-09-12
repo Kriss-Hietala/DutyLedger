@@ -1,9 +1,9 @@
 // DutyLedgerWindow.cs
 // ImGui window for the DutyLedger plugin: cap warnings, stats, averages per
 // duty, queue-time averages, filterable table with bonus/loot badges, CSV
-// export and a weekly bar chart (ImPlot) split into Clear/Wipe groups.
-// Averages/chart/queue data are cached and only recomputed when their
-// respective list counts change.
+// export, a simple daily activity chart, and a roulette-category breakdown
+// chart (ImPlot). Averages/chart/queue data are cached and only recomputed
+// when their respective list counts change.
 
 using System;
 using System.Collections.Generic;
@@ -24,6 +24,8 @@ public sealed class DutyLedgerWindow : Window
     private readonly record struct QueueAverageRow(
         string Role, string RouletteTag, int Count, TimeSpan AvgWait, TimeSpan MinWait, TimeSpan MaxWait);
 
+    private readonly record struct CategoryRow(string Category, int Count);
+
     private readonly Plugin plugin;
     private readonly Configuration config;
 
@@ -34,8 +36,8 @@ public sealed class DutyLedgerWindow : Window
 
     private int cachedEntryCount = -1;
     private List<AverageRow> cachedAverages = [];
-    private double[] cachedClearCounts = new double[7];
-    private double[] cachedWipeCounts = new double[7];
+    private double[] cachedDailyCounts = new double[7];
+    private List<CategoryRow> cachedCategoryCounts = [];
 
     private int cachedQueueCount = -1;
     private List<QueueAverageRow> cachedQueueAverages = [];
@@ -54,7 +56,7 @@ public sealed class DutyLedgerWindow : Window
 
         this.SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(1000, 600),
+            MinimumSize = new Vector2(1000, 620),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
     }
@@ -94,18 +96,16 @@ public sealed class DutyLedgerWindow : Window
                 .OrderByDescending(x => x.Runs)
                 .ToList();
 
-            var clearCounts = new double[7];
-            var wipeCounts = new double[7];
+            var dailyCounts = new double[7];
             foreach (var e in this.config.Entries)
-            {
-                var dow = ((int)e.StartedAt.LocalDateTime.DayOfWeek + 6) % 7;
-                if (e.Result == DutyResult.Clear)
-                    clearCounts[dow]++;
-                else
-                    wipeCounts[dow]++;
-            }
-            this.cachedClearCounts = clearCounts;
-            this.cachedWipeCounts = wipeCounts;
+                dailyCounts[((int)e.StartedAt.LocalDateTime.DayOfWeek + 6) % 7]++;
+            this.cachedDailyCounts = dailyCounts;
+
+            this.cachedCategoryCounts = this.config.Entries
+                .GroupBy(x => string.IsNullOrEmpty(x.RouletteTag) ? "Direct queue" : x.RouletteTag)
+                .Select(g => new CategoryRow(g.Key, g.Count()))
+                .OrderByDescending(x => x.Count)
+                .ToList();
         }
 
         if (this.config.QueueWaits.Count != this.cachedQueueCount)
@@ -188,45 +188,74 @@ public sealed class DutyLedgerWindow : Window
             : $"{weekEntries.Count} duties  \u2022  most common: {mostCommonThisWeek.Key} ({mostCommonThisWeek.Count()}x)");
 
         if (this.config.ShowWeeklyChart && !this.config.EcoMode)
-            this.DrawWeeklyChart();
+        {
+            this.DrawDailyChart();
+            this.DrawCategoryChart();
+        }
     }
 
-    /// <summary>
-    /// Grouped bar chart: Clear (green) vs Wipe/Abandon (red) counts per
-    /// weekday, instead of one generic aggregated "Duties" series - the
-    /// legend now actually distinguishes something meaningful.
-    /// </summary>
-    private void DrawWeeklyChart()
+    /// <summary>Simple total duty count per weekday - one aggregate series, which is fine on its own (this chart is about activity volume, not outcome).</summary>
+    private void DrawDailyChart()
     {
         if (this.config.Entries.Count == 0)
             return;
 
-        var clearCounts = this.cachedClearCounts;
-        var wipeCounts = this.cachedWipeCounts;
-
+        var counts = this.cachedDailyCounts;
         var dayLabels = new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
-        var positionsClear = Enumerable.Range(0, 7).Select(i => (double)i - 0.15).ToArray();
-        var positionsWipe = Enumerable.Range(0, 7).Select(i => (double)i + 0.15).ToArray();
+        var positions = Enumerable.Range(0, 7).Select(i => (double)i).ToArray();
 
-        var maxBar = Math.Max(1, (int)Math.Ceiling(Math.Max(clearCounts.Max(), wipeCounts.Max())));
-        var yTicks = Enumerable.Range(0, maxBar + 1).Select(i => (double)i).ToArray();
+        var maxCount = Math.Max(1, (int)Math.Ceiling(counts.Max()));
+        var yTicks = Enumerable.Range(0, maxCount + 1).Select(i => (double)i).ToArray();
         var yLabels = yTicks.Select(v => v.ToString("0")).ToArray();
 
         ImGui.Spacing();
-        ImGui.TextColored(this.ColorAccent, "Duties per day of the week (Clear vs Wipe/Abandon):");
+        ImGui.TextColored(this.ColorAccent, "Duties per day of the week:");
 
-        if (ImPlot.BeginPlot("##weekly_duty_chart", new Vector2(-1, this.config.ChartHeight)))
+        if (ImPlot.BeginPlot("##daily_duty_chart", new Vector2(-1, this.config.ChartHeight), ImPlotFlags.NoLegend))
         {
             ImPlot.SetupAxes(string.Empty, string.Empty);
             ImPlot.SetupAxisTicks(ImAxis.X1, 0, 6, 7, dayLabels);
-            ImPlot.SetupAxisTicks(ImAxis.Y1, 0, maxBar, maxBar + 1, yLabels);
-            ImPlot.SetupAxisLimits(ImAxis.Y1, 0, maxBar + 0.5, ImPlotCond.Always);
+            ImPlot.SetupAxisTicks(ImAxis.Y1, 0, maxCount, maxCount + 1, yLabels);
+            ImPlot.SetupAxisLimits(ImAxis.Y1, 0, maxCount + 0.5, ImPlotCond.Always);
 
-            ImPlot.SetNextFillStyle(this.ColorClear);
-            ImPlot.PlotBars("Clear", ref positionsClear[0], ref clearCounts[0], clearCounts.Length, 0.3);
+            ImPlot.SetNextFillStyle(this.ColorAccent);
+            ImPlot.PlotBars("Duties", ref positions[0], ref counts[0], counts.Length, 0.6);
 
-            ImPlot.SetNextFillStyle(this.ColorAbandon);
-            ImPlot.PlotBars("Wipe/Abandon", ref positionsWipe[0], ref wipeCounts[0], wipeCounts.Length, 0.3);
+            ImPlot.EndPlot();
+        }
+    }
+
+    /// <summary>
+    /// Bar per roulette category (plus "Direct queue" for non-roulette runs),
+    /// sorted by frequency. This is the breakdown that actually matters for
+    /// casual play, where Clear/Wipe is nearly always Clear and therefore
+    /// tells you very little.
+    /// </summary>
+    private void DrawCategoryChart()
+    {
+        if (this.cachedCategoryCounts.Count == 0)
+            return;
+
+        var positions = Enumerable.Range(0, this.cachedCategoryCounts.Count).Select(i => (double)i).ToArray();
+        var counts = this.cachedCategoryCounts.Select(c => (double)c.Count).ToArray();
+        var labels = this.cachedCategoryCounts.Select(c => c.Category).ToArray();
+
+        var maxCount = Math.Max(1, (int)Math.Ceiling(counts.Max()));
+        var yTicks = Enumerable.Range(0, maxCount + 1).Select(i => (double)i).ToArray();
+        var yLabels = yTicks.Select(v => v.ToString("0")).ToArray();
+
+        ImGui.Spacing();
+        ImGui.TextColored(this.ColorAccent, "Instances by roulette category:");
+
+        if (ImPlot.BeginPlot("##category_chart", new Vector2(-1, this.config.ChartHeight), ImPlotFlags.NoLegend))
+        {
+            ImPlot.SetupAxes(string.Empty, string.Empty);
+            ImPlot.SetupAxisTicks(ImAxis.X1, 0, this.cachedCategoryCounts.Count - 1, this.cachedCategoryCounts.Count, labels);
+            ImPlot.SetupAxisTicks(ImAxis.Y1, 0, maxCount, maxCount + 1, yLabels);
+            ImPlot.SetupAxisLimits(ImAxis.Y1, 0, maxCount + 0.5, ImPlotCond.Always);
+
+            ImPlot.SetNextFillStyle(this.ColorGold);
+            ImPlot.PlotBars("Instances", ref positions[0], ref counts[0], counts.Length, 0.6);
 
             ImPlot.EndPlot();
         }
