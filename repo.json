@@ -15,7 +15,7 @@
     "CanUnloadAsync": true,
     "DownloadLinkInstall": "https://github.com/Kriss-Hietala/DutyLedger/releases/download/v1.0.13.0/publish.zip",
     "DownloadLinkUpdate": "https://github.com/Kriss-Hietala/DutyLedger/releases/download/v1.0.13.0/publish.zip",
-    "DownloadLinkTesting": "https://github.com/Kriss-Hietala/DutyLedger/releases/download/v0.1.0.0/publish.zip",
+    "DownloadLinkTesting": "https://github.com/Kriss-Hietala/DutyLedger/releases/download/v1.0.13.0/publish.zip",
     "Tags": [
       "duty",
       "tracker",
