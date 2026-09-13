@@ -22,3 +22,4 @@ duty-ledger-queue-times*.csv
 # OS
 .DS_Store
 Thumbs.db
+packages.lock.json
