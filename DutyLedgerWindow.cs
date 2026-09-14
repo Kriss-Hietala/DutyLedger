@@ -509,7 +509,7 @@ public sealed class DutyLedgerWindow : Window
         ImGui.TableHeadersRow();
 
         var sortSpecs = ImGui.TableGetSortSpecs();
-        if (sortSpecs.NativePtr != null && sortSpecs.SpecsDirty && sortSpecs.SpecsCount > 0)
+        if (sortSpecs.SpecsDirty && sortSpecs.SpecsCount > 0)
         {
             var spec = sortSpecs.Specs;
             this.sortColumnIndex = spec.ColumnIndex;
