@@ -6,13 +6,17 @@
 // Both charts use a dynamic Y-axis tick step (1/2/5/10/20/25/50/...) picked
 // to keep roughly 4-8 labeled ticks regardless of how tall the tallest bar
 // is, instead of always labeling every single integer.
-// The duty table supports real click-to-sort on its headers (Date, Duty,
-// Job, Duration, Result, Wipes) via ImGui.TableGetSortSpecs() - the "Sort
-// by" dropdown is just a shortcut that sets the same underlying sort state.
+// All three tables (duty log, Duty Averages, Queue Times) support real
+// click-to-sort on their headers via ImGui.TableGetSortSpecs(); the main
+// table's "Sort by" dropdown is just a shortcut that sets the same
+// underlying sort state. Columns that show composite badges (Roulette,
+// Bonus, Rewards, Loot, Bonuses) are marked NoSort since there's no single
+// meaningful ordering for them.
 // Verbose static explanations live behind small "(?)" hover markers instead
 // of always-visible paragraphs, so the window stays scannable.
 // Averages/chart/queue data are cached and only recomputed when their
-// respective list counts change.
+// respective list counts change; per-table sort state is separate from that
+// cache and just re-orders a local copy each frame (these lists are small).
 
 using System;
 using System.Collections.Generic;
@@ -38,13 +42,29 @@ public sealed class DutyLedgerWindow : Window
     /// <summary>"Nice" step sizes tried in order until one keeps the tick count within a readable range for the given max value.</summary>
     private static readonly int[] NiceSteps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000];
 
-    // Table column indices, kept in sync with the TableSetupColumn calls in DrawTable().
+    // Duty log table column indices, kept in sync with the TableSetupColumn calls in DrawTable().
     private const int ColDate = 0;
     private const int ColDuty = 1;
     private const int ColJob = 2;
     private const int ColDuration = 3;
     private const int ColResult = 4;
     private const int ColWipes = 7;
+
+    // Duty Averages table column indices.
+    private const int AvgColDuty = 0;
+    private const int AvgColRuns = 1;
+    private const int AvgColClearRate = 2;
+    private const int AvgColDuration = 3;
+    private const int AvgColGilPerMin = 4;
+    private const int AvgColTomePerMin = 5;
+
+    // Queue Times table column indices.
+    private const int QueueColRole = 0;
+    private const int QueueColRoulette = 1;
+    private const int QueueColPops = 2;
+    private const int QueueColAvgWait = 3;
+    private const int QueueColMinWait = 4;
+    private const int QueueColMaxWait = 5;
 
     private readonly Plugin plugin;
     private readonly Configuration config;
@@ -55,6 +75,12 @@ public sealed class DutyLedgerWindow : Window
     private bool sortAscending = false;
     private string lastExportPath = "";
     private string lastQueueExportPath = "";
+
+    private int avgSortColumn = AvgColRuns;
+    private bool avgSortAscending = false;
+
+    private int queueSortColumn = QueueColRole;
+    private bool queueSortAscending = true;
 
     private int cachedEntryCount = -1;
     private List<AverageRow> cachedAverages = [];
@@ -364,6 +390,17 @@ public sealed class DutyLedgerWindow : Window
         }
     }
 
+    /// <summary>Maps a Duty Averages column index to the field used to order by it. Only called for the non-NoSort columns.</summary>
+    private static IComparable AverageSortKey(AverageRow x, int columnIndex) => columnIndex switch
+    {
+        AvgColRuns => x.Runs,
+        AvgColClearRate => x.Runs == 0 ? 0.0 : (double)x.Clears / x.Runs,
+        AvgColDuration => x.AvgDuration,
+        AvgColGilPerMin => x.AvgGilPerMin,
+        AvgColTomePerMin => x.AvgTomePerMin,
+        _ => x.Duty,
+    };
+
     private void DrawAveragesSection()
     {
         if (!ImGui.CollapsingHeader("Duty Averages"))
@@ -375,21 +412,34 @@ public sealed class DutyLedgerWindow : Window
             return;
         }
 
-        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp;
+        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Sortable;
 
         if (!ImGui.BeginTable("##averages", 7, flags))
             return;
 
         ImGui.TableSetupColumn("Duty", ImGuiTableColumnFlags.WidthStretch, 2);
-        ImGui.TableSetupColumn("Runs");
-        ImGui.TableSetupColumn("Clear rate");
-        ImGui.TableSetupColumn("Avg duration");
-        ImGui.TableSetupColumn("Avg gil/min");
-        ImGui.TableSetupColumn("Avg tomestones/min");
-        ImGui.TableSetupColumn("Bonuses (daily / AiN)");
+        ImGui.TableSetupColumn("Runs", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Clear rate", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Avg duration", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Avg gil/min", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Avg tomestones/min", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Bonuses (daily / AiN)", ImGuiTableColumnFlags.NoSort);
         ImGui.TableHeadersRow();
 
-        foreach (var g in this.cachedAverages)
+        var sortSpecs = ImGui.TableGetSortSpecs();
+        if (sortSpecs.SpecsDirty && sortSpecs.SpecsCount > 0)
+        {
+            var spec = sortSpecs.Specs;
+            this.avgSortColumn = spec.ColumnIndex;
+            this.avgSortAscending = spec.SortDirection == ImGuiSortDirection.Ascending;
+            sortSpecs.SpecsDirty = false;
+        }
+
+        var rows = this.avgSortAscending
+            ? this.cachedAverages.OrderBy(x => AverageSortKey(x, this.avgSortColumn)).ToList()
+            : this.cachedAverages.OrderByDescending(x => AverageSortKey(x, this.avgSortColumn)).ToList();
+
+        foreach (var g in rows)
         {
             ImGui.TableNextRow();
 
@@ -417,6 +467,17 @@ public sealed class DutyLedgerWindow : Window
 
         ImGui.EndTable();
     }
+
+    /// <summary>Maps a Queue Times column index to the field used to order by it.</summary>
+    private static IComparable QueueSortKey(QueueAverageRow x, int columnIndex) => columnIndex switch
+    {
+        QueueColRoulette => x.RouletteTag,
+        QueueColPops => x.Count,
+        QueueColAvgWait => x.AvgWait,
+        QueueColMinWait => x.MinWait,
+        QueueColMaxWait => x.MaxWait,
+        _ => x.Role,
+    };
 
     private void DrawQueueTimesSection()
     {
@@ -447,20 +508,33 @@ public sealed class DutyLedgerWindow : Window
             ImGui.TextColored(this.ColorMuted, $"Saved to: {this.lastQueueExportPath}");
         }
 
-        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp;
+        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Sortable;
 
         if (!ImGui.BeginTable("##queue_averages", 6, flags))
             return;
 
-        ImGui.TableSetupColumn("Role");
+        ImGui.TableSetupColumn("Role", ImGuiTableColumnFlags.DefaultSort);
         ImGui.TableSetupColumn("Roulette", ImGuiTableColumnFlags.WidthStretch, 2);
-        ImGui.TableSetupColumn("Pops");
-        ImGui.TableSetupColumn("Avg wait");
-        ImGui.TableSetupColumn("Min wait");
-        ImGui.TableSetupColumn("Max wait");
+        ImGui.TableSetupColumn("Pops", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Avg wait", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Min wait", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Max wait", ImGuiTableColumnFlags.PreferSortDescending);
         ImGui.TableHeadersRow();
 
-        foreach (var q in this.cachedQueueAverages)
+        var sortSpecs = ImGui.TableGetSortSpecs();
+        if (sortSpecs.SpecsDirty && sortSpecs.SpecsCount > 0)
+        {
+            var spec = sortSpecs.Specs;
+            this.queueSortColumn = spec.ColumnIndex;
+            this.queueSortAscending = spec.SortDirection == ImGuiSortDirection.Ascending;
+            sortSpecs.SpecsDirty = false;
+        }
+
+        var rows = this.queueSortAscending
+            ? this.cachedQueueAverages.OrderBy(x => QueueSortKey(x, this.queueSortColumn)).ToList()
+            : this.cachedQueueAverages.OrderByDescending(x => QueueSortKey(x, this.queueSortColumn)).ToList();
+
+        foreach (var q in rows)
         {
             ImGui.TableNextRow();
 
@@ -519,7 +593,7 @@ public sealed class DutyLedgerWindow : Window
             ImGui.TextColored(this.ColorMuted, $"Saved to: {this.lastExportPath}");
     }
 
-    /// <summary>Maps a table column index to the DutyEntry field used to order by it. Only called for columns that are NOT marked NoSort.</summary>
+    /// <summary>Maps a duty log table column index to the DutyEntry field used to order by it. Only called for columns that are NOT marked NoSort.</summary>
     private static IComparable SortKey(DutyEntry x, int columnIndex) => columnIndex switch
     {
         ColDuty => x.DutyName,
