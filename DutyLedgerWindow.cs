@@ -8,10 +8,9 @@
 // is, instead of always labeling every single integer.
 // The duty table supports real click-to-sort on its headers (Date, Duty,
 // Job, Duration, Result, Wipes) via ImGui.TableGetSortSpecs() - the "Sort
-// by" dropdown is just a shortcut that sets the same underlying sort state,
-// so the two controls never fight each other. Columns that show composite
-// badges (Roulette/Bonus/Rewards/Loot) are marked NoSort since there's no
-// single meaningful ordering for them.
+// by" dropdown is just a shortcut that sets the same underlying sort state.
+// Verbose static explanations live behind small "(?)" hover markers instead
+// of always-visible paragraphs, so the window stays scannable.
 // Averages/chart/queue data are cached and only recomputed when their
 // respective list counts change.
 
@@ -84,6 +83,48 @@ public sealed class DutyLedgerWindow : Window
         };
     }
 
+    /// <summary>Small "(?)" marker placed right after a label/widget on the same line; hovering shows the full explanation as a tooltip instead of it always taking up vertical space.</summary>
+    private static void HelpMarker(string text)
+    {
+        ImGui.SameLine();
+        ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.PushTextWrapPos(ImGui.GetFontSize() * 28f);
+            ImGui.TextUnformatted(text);
+            ImGui.PopTextWrapPos();
+            ImGui.EndTooltip();
+        }
+    }
+
+    /// <summary>
+    /// Maps older/inconsistently-cased roulette tag strings from earlier
+    /// plugin versions onto the current canonical name, so historical
+    /// entries group together with new ones instead of showing up as a
+    /// separate near-duplicate bar in the category chart. Extend this list
+    /// if you spot another split pair after a future rename.
+    /// </summary>
+    private static string NormalizeCategory(string tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+            return "Direct queue";
+
+        var trimmed = tag.Trim();
+
+        if (trimmed.Equals("Alliance", StringComparison.OrdinalIgnoreCase))
+            return "Alliance Raids";
+        if (trimmed.Equals("Normal Raid", StringComparison.OrdinalIgnoreCase))
+            return "Normal Raids";
+        if (trimmed.Equals("Level Cap Dungeon", StringComparison.OrdinalIgnoreCase))
+            return "Level Cap Dungeons";
+        if (trimmed.Equals("High-Level Dungeons", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("High Level Dungeons", StringComparison.OrdinalIgnoreCase))
+            return "High-level Dungeons";
+
+        return trimmed;
+    }
+
     public override void Draw()
     {
         this.RefreshCachesIfNeeded();
@@ -125,7 +166,7 @@ public sealed class DutyLedgerWindow : Window
             this.cachedDailyCounts = dailyCounts;
 
             this.cachedCategoryCounts = this.config.Entries
-                .GroupBy(x => string.IsNullOrEmpty(x.RouletteTag) ? "Direct queue" : x.RouletteTag)
+                .GroupBy(x => NormalizeCategory(x.RouletteTag))
                 .Select(g => new CategoryRow(g.Key, g.Count()))
                 .OrderByDescending(x => x.Count)
                 .ToList();
@@ -136,7 +177,7 @@ public sealed class DutyLedgerWindow : Window
             this.cachedQueueCount = this.config.QueueWaits.Count;
 
             this.cachedQueueAverages = this.config.QueueWaits
-                .GroupBy(x => (x.Role, RouletteTag: string.IsNullOrEmpty(x.RouletteTag) ? "(not roulette)" : x.RouletteTag))
+                .GroupBy(x => (x.Role, RouletteTag: string.IsNullOrEmpty(x.RouletteTag) ? "(not roulette)" : NormalizeCategory(x.RouletteTag)))
                 .Select(g => new QueueAverageRow(
                     g.Key.Role,
                     g.Key.RouletteTag,
@@ -199,10 +240,12 @@ public sealed class DutyLedgerWindow : Window
         ImGui.TextColored(this.ColorAccent, "Today:");
         ImGui.SameLine();
         ImGui.Text($"{todayEntries.Count} duties  \u2022  time: {Format(todayTime)}  \u2022  gil: {todayGil:N0}  \u2022  clear rate: {todayClearRate:0}%%");
+        HelpMarker("\"Today\" and \"This week\" use your local calendar day/week (week starts Monday) - not a rolling 24h/7d window.");
 
         ImGui.TextColored(this.ColorGold, "Bonuses today:");
         ImGui.SameLine();
         ImGui.Text($"daily roulette x{todayDaily}  \u2022  adventurer-in-need x{todayAiN}  \u2022  first-clear x{todayFirst}");
+        HelpMarker("Daily = daily roulette bonus. AiN = adventurer-in-need bonus. First-clear = first duty completion of the day bonus. Detected from the reward chat lines, so an addon that suppresses those messages will hide the bonus here too.");
 
         ImGui.TextColored(this.ColorAccent, "This week:");
         ImGui.SameLine();
@@ -216,10 +259,16 @@ public sealed class DutyLedgerWindow : Window
         ImGui.Spacing();
 
         if (ImGui.CollapsingHeader("Duties per day of the week", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            HelpMarker("Total duties completed on each weekday, across your entire history (not just this week).");
             this.DrawDailyChart();
+        }
 
         if (ImGui.CollapsingHeader("Instances by roulette category", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            HelpMarker("\"Direct queue\" = queued for the specific duty, not through any roulette. \"Ambiguous (untagged)\" = the duty was in more than one roulette pool and you skipped picking which one.");
             this.DrawCategoryChart();
+        }
     }
 
     /// <summary>Picks a "nice" Y-axis step (1/2/5/10/20/25/50/...) so the tallest bar produces roughly 4-8 labeled ticks instead of one tick per integer.</summary>
@@ -371,7 +420,10 @@ public sealed class DutyLedgerWindow : Window
 
     private void DrawQueueTimesSection()
     {
-        if (!ImGui.CollapsingHeader("Queue Times"))
+        var headerOpen = ImGui.CollapsingHeader("Queue Times");
+        HelpMarker("Only queues that actually popped are counted - cancelled/withdrawn queues are discarded. If multiple duties/roulettes were queued at once, the wait is attributed to whichever one popped.");
+
+        if (!headerOpen)
             return;
 
         if (!this.config.TrackQueueTimes)
@@ -385,10 +437,6 @@ public sealed class DutyLedgerWindow : Window
             ImGui.TextDisabled("No completed queue pops logged yet.");
             return;
         }
-
-        ImGui.TextDisabled("Only queues that actually popped are counted - cancelled/withdrawn queues are discarded.");
-        ImGui.TextDisabled("If multiple duties/roulettes were queued at once, the wait is attributed to whichever one popped.");
-        ImGui.Spacing();
 
         if (ImGui.Button("Export queue times CSV"))
             this.lastQueueExportPath = this.plugin.ExportQueueTimesCsv();

@@ -439,6 +439,24 @@ public sealed class Plugin : IDalamudPlugin
         var waitTime = DateTimeOffset.Now - startedAt;
         var candidates = this.ResolveCandidateRouletteTags(poppedCfc.RowId);
 
+        // Fallback: if the RowId the CfPop event handed us doesn't resolve to
+        // any roulette-flagged CFC row (seen in practice returning an empty
+        // candidate list even for duties clearly queued via a roulette),
+        // try re-resolving the CFC by matching its display name instead.
+        // Name lookups are O(n) over the sheet, but this only runs on the
+        // rare path where the fast RowId lookup already came back empty.
+        if (candidates.Count == 0)
+        {
+            var poppedName = poppedCfc.Name.ToString();
+            if (!string.IsNullOrWhiteSpace(poppedName))
+            {
+                var byName = this.data.GetExcelSheet<ContentFinderCondition>()
+                    .FirstOrDefault(r => string.Equals(r.Name.ToString(), poppedName, StringComparison.OrdinalIgnoreCase));
+                if (byName.RowId != 0 && byName.RowId != poppedCfc.RowId)
+                    candidates = this.ResolveCandidateRouletteTags(byName.RowId);
+            }
+        }
+
         var entry = new QueueWaitEntry
         {
             QueuedAt = startedAt,
@@ -452,7 +470,8 @@ public sealed class Plugin : IDalamudPlugin
         this.config.QueueWaits.Add(entry);
         this.Save();
 
-        this.log.Debug($"[DutyLedger] Queue popped after {waitTime}: {entry.DutyName} ({entry.Role}, roulette: \"{entry.RouletteTag}\")");
+        this.log.Debug($"[DutyLedger] Queue popped after {waitTime}: {entry.DutyName} (CFC {poppedCfc.RowId}, {entry.Role}, " +
+            $"roulette: \"{entry.RouletteTag}\", candidates: [{string.Join(", ", candidates)}])");
 
         this.queueStartedAt = null;
         this.queueJob = null;
@@ -557,9 +576,6 @@ public sealed class Plugin : IDalamudPlugin
         if (FirstDutyBonusPattern.IsMatch(text))
         {
             this.activeDuty.FirstDutyBonus = true;
-            // Same as Daily/AiN above: this announcement line is the only place
-            // the reward amount ever appears in chat, so if we don't grab it
-            // here it silently never gets counted into GainedGil at all.
             this.AddGilFromLine(text);
             this.log.Debug($"[DutyLedger] First-duty-clear bonus announced: \"{text}\"");
         }

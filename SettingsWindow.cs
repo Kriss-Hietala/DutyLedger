@@ -1,6 +1,9 @@
 // SettingsWindow.cs
 // Dedicated configuration window, opened by Dalamud's own "gear" icon in the
 // plugin installer (wired to IDalamudPluginInterface.UiBuilder.OpenConfigUi).
+// Verbose static explanations live behind small "(?)" hover markers next to
+// the relevant control instead of always-visible paragraphs, so scanning
+// the window for the setting you actually want is faster.
 
 using System;
 using System.Numerics;
@@ -25,6 +28,21 @@ public sealed class SettingsWindow : Window
     {
         this.plugin = plugin;
         this.config = config;
+    }
+
+    /// <summary>Small "(?)" marker placed right after a label/widget on the same line; hovering shows the full explanation as a tooltip instead of it always taking up vertical space.</summary>
+    private static void HelpMarker(string text)
+    {
+        ImGui.SameLine();
+        ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.PushTextWrapPos(ImGui.GetFontSize() * 28f);
+            ImGui.TextUnformatted(text);
+            ImGui.PopTextWrapPos();
+            ImGui.EndTooltip();
+        }
     }
 
     public override void Draw()
@@ -77,7 +95,7 @@ public sealed class SettingsWindow : Window
             this.config.MinimumDurationSeconds = minDuration;
             this.plugin.Save();
         }
-        ImGui.TextDisabled("Runs shorter than this are ignored (filters out accidental enter/leave).");
+        HelpMarker("Runs shorter than this are ignored (filters out accidental enter/leave).");
 
         var compact = this.config.CompactMode;
         if (ImGui.Checkbox("Start in compact mode", ref compact))
@@ -95,6 +113,7 @@ public sealed class SettingsWindow : Window
             this.config.ShowWeeklyChart = showChart;
             this.plugin.Save();
         }
+        HelpMarker("Right-click the chart itself for legend/autofit options (built into ImPlot). Disabled automatically while Eco Mode is on (see Performance below).");
 
         var height = this.config.ChartHeight;
         ImGui.SetNextItemWidth(200);
@@ -103,8 +122,6 @@ public sealed class SettingsWindow : Window
             this.config.ChartHeight = height;
             this.plugin.Save();
         }
-        ImGui.TextDisabled("Tip: right-click the chart itself for legend/autofit options (built into ImPlot).");
-        ImGui.TextDisabled("Disabled automatically while Eco Mode is on (see Performance below).");
     }
 
     private void DrawLootSection()
@@ -115,7 +132,7 @@ public sealed class SettingsWindow : Window
             this.config.TrackRareLoot = trackLoot;
             this.plugin.Save();
         }
-        ImGui.TextDisabled("Junk gear, materia, and crafting materials are always filtered out - only collectible-category items are kept.");
+        HelpMarker("Junk gear, materia, and crafting materials are always filtered out - only collectible-category items are kept.");
     }
 
     private void DrawQueueSection()
@@ -126,7 +143,7 @@ public sealed class SettingsWindow : Window
             this.config.TrackQueueTimes = trackQueue;
             this.plugin.Save();
         }
-        ImGui.TextWrapped(
+        HelpMarker(
             "Measures the time from joining a Duty Finder queue (ConditionFlag.InDutyQueue) to the " +
             "queue popping (IClientState.CfPop). Cancelled/withdrawn queues are not recorded. If you " +
             "queue for multiple duties/roulettes at once, the wait is attributed to whichever one pops.");
@@ -151,29 +168,24 @@ public sealed class SettingsWindow : Window
 
     private void DrawPerformanceSection()
     {
-        ImGui.TextWrapped(
-            "Duty averages, the weekly chart, and queue-time averages are cached and only recomputed " +
-            "when a new duty/queue pop is logged - not on every frame - so for a typical history " +
-            "(hundreds of entries) the difference Eco Mode makes is small. It mainly helps if your " +
-            "history has grown into the thousands of entries, by skipping the chart and rendering " +
-            "item icons as plain text.");
-
         var eco = this.config.EcoMode;
         if (ImGui.Checkbox("Eco Mode (skip chart, use text instead of icons)", ref eco))
         {
             this.config.EcoMode = eco;
             this.plugin.Save();
         }
+        HelpMarker(
+            "Duty averages, the weekly chart, and queue-time averages are cached and only recomputed " +
+            "when a new duty/queue pop is logged - not on every frame - so for a typical history " +
+            "(hundreds of entries) the difference Eco Mode makes is small. It mainly helps if your " +
+            "history has grown into the thousands of entries, by skipping the chart and rendering " +
+            "item icons as plain text.");
 
         ImGui.Text($"Currently logged: {this.config.Entries.Count} duties, {this.config.QueueWaits.Count} queue pops.");
         if (this.config.Entries.Count < 1000)
-        {
             ImGui.TextColored(this.config.ColorMuted.Vector, "At this size, Eco Mode is unlikely to be noticeable.");
-        }
         else
-        {
             ImGui.TextColored(this.config.ColorGold.Vector, "Your history is large enough that Eco Mode may help.");
-        }
     }
 
     private void DrawColorSection()
@@ -223,6 +235,14 @@ public sealed class SettingsWindow : Window
             });
     }
 
+    /// <summary>
+    /// A destructive-action button hardened against accidental clicks:
+    /// 1) the button itself is red/danger-colored and separated from normal
+    /// controls, 2) clicking it opens a confirmation area rather than
+    /// acting immediately, 3) the actual delete button stays disabled
+    /// until you tick an explicit "I understand" checkbox. Three
+    /// deliberate steps instead of one accidental click.
+    /// </summary>
     private void DrawDangerousClear(string buttonLabel, string warningText, ref bool requested, ref bool acknowledged, Action onConfirmed)
     {
         var danger = this.config.ColorAbandon.Vector;
@@ -242,7 +262,7 @@ public sealed class SettingsWindow : Window
         }
 
         ImGui.PushStyleColor(ImGuiCol.Border, danger);
-        ImGui.BeginChild($"##danger_{buttonLabel}", new Vector2(0, 90), true);
+        ImGui.BeginChild($"##danger_{buttonLabel}", new Vector2(0, 90), ImGuiChildFlags.Borders | ImGuiChildFlags.AutoResizeY);
 
         ImGui.TextColored(danger, warningText);
         ImGui.TextColored(danger, "This cannot be undone.");
@@ -271,6 +291,7 @@ public sealed class SettingsWindow : Window
         ImGui.PopStyleColor();
     }
 
+    /// <summary>Standard "Close" button at the bottom, where users expect one instead of relying only on the title bar X.</summary>
     private void DrawFooter()
     {
         if (ImGui.Button("Close Settings", new Vector2(150, 0)))
