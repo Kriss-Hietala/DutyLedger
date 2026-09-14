@@ -262,7 +262,10 @@ public sealed class SettingsWindow : Window
         }
 
         ImGui.PushStyleColor(ImGuiCol.Border, danger);
-        ImGui.BeginChild($"##danger_{buttonLabel}", new Vector2(0, 90), ImGuiChildFlags.Borders | ImGuiChildFlags.AutoResizeY);
+        // This ImGui binding's BeginChild takes a plain "bool border" third
+        // parameter (older API shape), not an ImGuiChildFlags enum - that
+        // enum simply isn't defined in this binding version.
+        ImGui.BeginChild($"##danger_{buttonLabel}", new Vector2(0, 90), true);
 
         ImGui.TextColored(danger, warningText);
         ImGui.TextColored(danger, "This cannot be undone.");
