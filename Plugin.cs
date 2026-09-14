@@ -230,12 +230,13 @@ public sealed class Plugin : IDalamudPlugin
         return iconId == 0 ? null : this.textures.GetFromGameIcon(new GameIconLookup(iconId));
     }
 
+    /// <summary>Escapes a value for CSV: doubles embedded quotes, and flattens embedded line breaks to spaces so a single logical field can never be split across rows by simple/naive CSV readers.</summary>
+    private static string Csv(string value) => "\"" + value.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ').Replace("\"", "\"\"") + "\"";
+
     internal string ExportCsv()
     {
         var path = Path.Combine(this.pluginInterface.ConfigDirectory.FullName, $"duty-ledger-export-{DateTime.Now:yyyyMMdd-HHmmss}.csv");
         var sb = new StringBuilder("StartedAt,EndedAt,Duty,Job,TerritoryId,DurationSeconds,Result,RouletteTag,RouletteTagAuto,WipeCount,GainedGil,Tomestones,DailyRouletteBonus,AdventurerInNeed,FirstDutyBonus,RareLoot\n");
-
-        static string Csv(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
 
         foreach (var x in this.config.Entries.OrderBy(e => e.StartedAt))
         {
@@ -268,8 +269,6 @@ public sealed class Plugin : IDalamudPlugin
     {
         var path = Path.Combine(this.pluginInterface.ConfigDirectory.FullName, $"duty-ledger-queue-times-{DateTime.Now:yyyyMMdd-HHmmss}.csv");
         var sb = new StringBuilder("QueuedAt,WaitSeconds,Duty,RouletteTag,Job,Role\n");
-
-        static string Csv(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
 
         foreach (var x in this.config.QueueWaits.OrderBy(e => e.QueuedAt))
         {
@@ -306,6 +305,11 @@ public sealed class Plugin : IDalamudPlugin
         this.windows.Draw();
     }
 
+    /// <summary>
+    /// Every ~10s, re-verify any tomestone currently flagged as capped against
+    /// its LIVE inventory count. This is what lets the warning auto-clear once
+    /// you spend some down, since we have no other event that would tell us.
+    /// </summary>
     private void PeriodicCapRecheck()
     {
         if (DateTimeOffset.Now - this.lastCapRecheck < TimeSpan.FromSeconds(10))
@@ -320,6 +324,13 @@ public sealed class Plugin : IDalamudPlugin
             this.CheckLiveTomestoneCap(name);
     }
 
+    /// <summary>
+    /// Reads the player's ACTUAL current count of a tomestone type via
+    /// InventoryManager (FFXIVClientStructs) rather than waiting for a chat
+    /// message - the game only prints "cannot receive any more" when a gain
+    /// is actively denied, never when you land exactly on the 2000 cap with
+    /// nothing left over to deny.
+    /// </summary>
     private unsafe void CheckLiveTomestoneCap(string tomestoneName)
     {
         var item = this.FindItemByName(tomestoneName);
@@ -367,7 +378,7 @@ public sealed class Plugin : IDalamudPlugin
         };
 
         this.log.Debug($"[DutyLedger] Duty started: {this.activeDuty.DutyName} (CFC {cfcId}, territory {territoryId}), " +
-                        $"roulette candidates: [{string.Join(", ", this.activeDuty.CandidateRouletteTags)}]");
+            $"roulette candidates: [{string.Join(", ", this.activeDuty.CandidateRouletteTags)}]");
     }
 
     private void OnDutyCompleted(IDutyStateEventArgs args)
@@ -546,6 +557,10 @@ public sealed class Plugin : IDalamudPlugin
         if (FirstDutyBonusPattern.IsMatch(text))
         {
             this.activeDuty.FirstDutyBonus = true;
+            // Same as Daily/AiN above: this announcement line is the only place
+            // the reward amount ever appears in chat, so if we don't grab it
+            // here it silently never gets counted into GainedGil at all.
+            this.AddGilFromLine(text);
             this.log.Debug($"[DutyLedger] First-duty-clear bonus announced: \"{text}\"");
         }
 
@@ -556,6 +571,8 @@ public sealed class Plugin : IDalamudPlugin
             this.activeDuty.GainedTomestones[stoneName] =
                 this.activeDuty.GainedTomestones.GetValueOrDefault(stoneName) + amount;
 
+            // Check the LIVE count immediately - this is what catches landing
+            // exactly on 2000/2000, which never produces a "cannot receive" line.
             this.CheckLiveTomestoneCap(stoneName);
             return;
         }

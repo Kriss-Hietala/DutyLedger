@@ -5,9 +5,13 @@
 // independently-collapsible roulette-category breakdown chart (ImPlot).
 // Both charts use a dynamic Y-axis tick step (1/2/5/10/20/25/50/...) picked
 // to keep roughly 4-8 labeled ticks regardless of how tall the tallest bar
-// is, instead of always labeling every single integer - a fixed 0-1-2-3...
-// step became an unreadable wall of overlapping labels once any single day
-// or category climbed into the double digits.
+// is, instead of always labeling every single integer.
+// The duty table supports real click-to-sort on its headers (Date, Duty,
+// Job, Duration, Result, Wipes) via ImGui.TableGetSortSpecs() - the "Sort
+// by" dropdown is just a shortcut that sets the same underlying sort state,
+// so the two controls never fight each other. Columns that show composite
+// badges (Roulette/Bonus/Rewards/Loot) are marked NoSort since there's no
+// single meaningful ordering for them.
 // Averages/chart/queue data are cached and only recomputed when their
 // respective list counts change.
 
@@ -35,11 +39,21 @@ public sealed class DutyLedgerWindow : Window
     /// <summary>"Nice" step sizes tried in order until one keeps the tick count within a readable range for the given max value.</summary>
     private static readonly int[] NiceSteps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000];
 
+    // Table column indices, kept in sync with the TableSetupColumn calls in DrawTable().
+    private const int ColDate = 0;
+    private const int ColDuty = 1;
+    private const int ColJob = 2;
+    private const int ColDuration = 3;
+    private const int ColResult = 4;
+    private const int ColWipes = 7;
+
     private readonly Plugin plugin;
     private readonly Configuration config;
 
     private string search = "";
-    private SortMode sortMode = SortMode.Newest;
+    private int sortPresetIndex = 0;
+    private int sortColumnIndex = ColDate;
+    private bool sortAscending = false;
     private string lastExportPath = "";
     private string lastQueueExportPath = "";
 
@@ -269,9 +283,7 @@ public sealed class DutyLedgerWindow : Window
     /// <summary>
     /// Bar per roulette category (plus "Direct queue" for non-roulette runs
     /// and "Ambiguous (untagged)" for skipped multi-candidate duties), sorted
-    /// by frequency. This is the breakdown that actually matters for casual
-    /// play, where Clear/Wipe is nearly always Clear and therefore tells you
-    /// very little.
+    /// by frequency.
     /// </summary>
     private void DrawCategoryChart()
     {
@@ -433,9 +445,15 @@ public sealed class DutyLedgerWindow : Window
 
         ImGui.SameLine();
         ImGui.SetNextItemWidth(150);
-        var sortIndex = (int)this.sortMode;
-        if (ImGui.Combo("Sort by", ref sortIndex, new[] { "Newest", "Longest", "Duty name" }, 3))
-            this.sortMode = (SortMode)sortIndex;
+        if (ImGui.Combo("Sort by", ref this.sortPresetIndex, new[] { "Newest", "Longest", "Duty name" }, 3))
+        {
+            (this.sortColumnIndex, this.sortAscending) = this.sortPresetIndex switch
+            {
+                1 => (ColDuration, false),
+                2 => (ColDuty, true),
+                _ => (ColDate, false),
+            };
+        }
 
         ImGui.SameLine();
         if (ImGui.Button("Export CSV"))
@@ -453,6 +471,17 @@ public sealed class DutyLedgerWindow : Window
             ImGui.TextColored(this.ColorMuted, $"Saved to: {this.lastExportPath}");
     }
 
+    /// <summary>Maps a table column index to the DutyEntry field used to order by it. Only called for columns that are NOT marked NoSort.</summary>
+    private static IComparable SortKey(DutyEntry x, int columnIndex) => columnIndex switch
+    {
+        ColDuty => x.DutyName,
+        ColJob => x.Job,
+        ColDuration => x.Duration,
+        ColResult => x.Result,
+        ColWipes => x.WipeCount,
+        _ => x.StartedAt,
+    };
+
     private void DrawTable()
     {
         var rows = this.config.Entries
@@ -461,30 +490,36 @@ public sealed class DutyLedgerWindow : Window
                         || x.Job.Contains(this.search, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        rows = this.sortMode switch
-        {
-            SortMode.Longest => rows.OrderByDescending(x => x.Duration).ToList(),
-            SortMode.Duty => rows.OrderBy(x => x.DutyName).ThenByDescending(x => x.StartedAt).ToList(),
-            _ => rows.OrderByDescending(x => x.StartedAt).ToList(),
-        };
-
         const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
             | ImGuiTableFlags.ScrollY | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Sortable;
 
         if (!ImGui.BeginTable("##duties", 10, flags, new Vector2(0, -1)))
             return;
 
-        ImGui.TableSetupColumn("Date");
+        ImGui.TableSetupColumn("Date", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.PreferSortDescending);
         ImGui.TableSetupColumn("Duty", ImGuiTableColumnFlags.WidthStretch, 2);
         ImGui.TableSetupColumn("Job");
-        ImGui.TableSetupColumn("Duration");
+        ImGui.TableSetupColumn("Duration", ImGuiTableColumnFlags.PreferSortDescending);
         ImGui.TableSetupColumn("Result");
-        ImGui.TableSetupColumn("Roulette");
-        ImGui.TableSetupColumn("Bonus");
-        ImGui.TableSetupColumn("Wipes");
-        ImGui.TableSetupColumn("Rewards", ImGuiTableColumnFlags.WidthStretch, 1.6f);
-        ImGui.TableSetupColumn("Loot");
+        ImGui.TableSetupColumn("Roulette", ImGuiTableColumnFlags.NoSort);
+        ImGui.TableSetupColumn("Bonus", ImGuiTableColumnFlags.NoSort);
+        ImGui.TableSetupColumn("Wipes", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Rewards", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.NoSort, 1.6f);
+        ImGui.TableSetupColumn("Loot", ImGuiTableColumnFlags.NoSort);
         ImGui.TableHeadersRow();
+
+        var sortSpecs = ImGui.TableGetSortSpecs();
+        if (sortSpecs.NativePtr != null && sortSpecs.SpecsDirty && sortSpecs.SpecsCount > 0)
+        {
+            var spec = sortSpecs.Specs;
+            this.sortColumnIndex = spec.ColumnIndex;
+            this.sortAscending = spec.SortDirection == ImGuiSortDirection.Ascending;
+            sortSpecs.SpecsDirty = false;
+        }
+
+        rows = this.sortAscending
+            ? rows.OrderBy(x => SortKey(x, this.sortColumnIndex)).ToList()
+            : rows.OrderByDescending(x => SortKey(x, this.sortColumnIndex)).ToList();
 
         foreach (var x in rows)
         {
