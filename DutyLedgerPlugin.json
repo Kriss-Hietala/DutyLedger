@@ -2,7 +2,7 @@
   "Author": "Kriss-Hietala",
   "Name": "Duty Ledger",
   "InternalName": "DutyLedgerPlugin",
-  "AssemblyVersion": "1.0.20.0",
+  "AssemblyVersion": "1.0.21.0",
   "Description": "Logs the duty instances you complete: name, job, start/end time, result (Clear/Wipe), and rewards (gil, tomestones). Includes stats, a filterable table, roulette detection, loot tracking, queue-time tracking, and a weekly chart.",
   "Punchline": "Your duty diary - history, stats, loot and queue times in one window.",
   "Website": "https://github.com/Kriss-Hietala/DutyLedger",
