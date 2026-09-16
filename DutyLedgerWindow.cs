@@ -1,20 +1,21 @@
 // DutyLedgerWindow.cs
-// ImGui window for the DutyLedger plugin: cap warnings, stats, averages per
-// duty, queue-time averages, filterable table with bonus/loot badges, CSV
-// export, an independently-collapsible daily activity chart, and an
-// independently-collapsible roulette-category breakdown chart (ImPlot).
+// ImGui window for the DutyLedger plugin: cap warnings, stats, a sortable
+// day-by-day breakdown, averages per duty, queue-time averages, filterable
+// table with bonus/loot badges, CSV export, an independently-collapsible
+// daily activity chart, and an independently-collapsible roulette-category
+// breakdown chart (ImPlot).
 // Both charts use a dynamic Y-axis tick step (1/2/5/10/20/25/50/...) picked
 // to keep roughly 4-8 labeled ticks regardless of how tall the tallest bar
 // is, instead of always labeling every single integer.
-// All three tables (duty log, Duty Averages, Queue Times) support real
-// click-to-sort on their headers via ImGui.TableGetSortSpecs(); the main
-// table's "Sort by" dropdown is just a shortcut that sets the same
+// All tables (duty log, Daily Breakdown, Duty Averages, Queue Times)
+// support real click-to-sort on their headers via ImGui.TableGetSortSpecs();
+// the main table's "Sort by" dropdown is just a shortcut that sets the same
 // underlying sort state. Columns that show composite badges (Roulette,
 // Bonus, Rewards, Loot, Bonuses) are marked NoSort since there's no single
 // meaningful ordering for them.
 // Verbose static explanations live behind small "(?)" hover markers instead
 // of always-visible paragraphs, so the window stays scannable.
-// Averages/chart/queue data are cached and only recomputed when their
+// Averages/chart/queue/daily data are cached and only recomputed when their
 // respective list counts change; per-table sort state is separate from that
 // cache and just re-orders a local copy each frame (these lists are small).
 
@@ -38,6 +39,9 @@ public sealed class DutyLedgerWindow : Window
         string Role, string RouletteTag, int Count, TimeSpan AvgWait, TimeSpan MinWait, TimeSpan MaxWait);
 
     private readonly record struct CategoryRow(string Category, int Count);
+
+    private readonly record struct DailyBreakdownRow(
+        DateOnly Date, int Duties, TimeSpan TotalTime, int TotalGil, int TotalTomestones, double ClearRatePercent);
 
     /// <summary>"Nice" step sizes tried in order until one keeps the tick count within a readable range for the given max value.</summary>
     private static readonly int[] NiceSteps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000];
@@ -66,6 +70,14 @@ public sealed class DutyLedgerWindow : Window
     private const int QueueColMinWait = 4;
     private const int QueueColMaxWait = 5;
 
+    // Daily Breakdown table column indices.
+    private const int DayColDate = 0;
+    private const int DayColDuties = 1;
+    private const int DayColTime = 2;
+    private const int DayColGil = 3;
+    private const int DayColTomestones = 4;
+    private const int DayColClearRate = 5;
+
     private readonly Plugin plugin;
     private readonly Configuration config;
 
@@ -82,10 +94,14 @@ public sealed class DutyLedgerWindow : Window
     private int queueSortColumn = QueueColRole;
     private bool queueSortAscending = true;
 
+    private int daySortColumn = DayColDate;
+    private bool daySortAscending = false;
+
     private int cachedEntryCount = -1;
     private List<AverageRow> cachedAverages = [];
     private double[] cachedDailyCounts = new double[7];
     private List<CategoryRow> cachedCategoryCounts = [];
+    private List<DailyBreakdownRow> cachedDailyBreakdown = [];
 
     private int cachedQueueCount = -1;
     private List<QueueAverageRow> cachedQueueAverages = [];
@@ -158,6 +174,8 @@ public sealed class DutyLedgerWindow : Window
         this.DrawCapWarnings();
         this.DrawStatsSection();
         ImGui.Separator();
+        this.DrawDailyBreakdownSection();
+        ImGui.Separator();
         this.DrawAveragesSection();
         ImGui.Separator();
         this.DrawQueueTimesSection();
@@ -195,6 +213,18 @@ public sealed class DutyLedgerWindow : Window
                 .GroupBy(x => NormalizeCategory(x.RouletteTag))
                 .Select(g => new CategoryRow(g.Key, g.Count()))
                 .OrderByDescending(x => x.Count)
+                .ToList();
+
+            this.cachedDailyBreakdown = this.config.Entries
+                .GroupBy(x => DateOnly.FromDateTime(x.StartedAt.LocalDateTime.Date))
+                .Select(g => new DailyBreakdownRow(
+                    g.Key,
+                    g.Count(),
+                    g.Aggregate(TimeSpan.Zero, (sum, x) => sum + x.Duration),
+                    g.Sum(x => x.GainedGil),
+                    g.Sum(x => x.TotalTomestones),
+                    100.0 * g.Count(x => x.Result == DutyResult.Clear) / g.Count()))
+                .OrderByDescending(x => x.Date)
                 .ToList();
         }
 
@@ -266,7 +296,7 @@ public sealed class DutyLedgerWindow : Window
         ImGui.TextColored(this.ColorAccent, "Today:");
         ImGui.SameLine();
         ImGui.Text($"{todayEntries.Count} duties  \u2022  time: {Format(todayTime)}  \u2022  gil: {todayGil:N0}  \u2022  clear rate: {todayClearRate:0}%%");
-        HelpMarker("\"Today\" and \"This week\" use your local calendar day/week (week starts Monday) - not a rolling 24h/7d window.");
+        HelpMarker("\"Today\" and \"This week\" use your local calendar day/week (week starts Monday) - not a rolling 24h/7d window. For yesterday or comparing several days, see the Daily Breakdown table below.");
 
         ImGui.TextColored(this.ColorGold, "Bonuses today:");
         ImGui.SameLine();
@@ -388,6 +418,98 @@ public sealed class DutyLedgerWindow : Window
 
             ImPlot.EndPlot();
         }
+    }
+
+    /// <summary>Maps a Daily Breakdown column index to the field used to order by it.</summary>
+    private static IComparable DailyBreakdownSortKey(DailyBreakdownRow x, int columnIndex) => columnIndex switch
+    {
+        DayColDuties => x.Duties,
+        DayColTime => x.TotalTime,
+        DayColGil => x.TotalGil,
+        DayColTomestones => x.TotalTomestones,
+        DayColClearRate => x.ClearRatePercent,
+        _ => x.Date,
+    };
+
+    /// <summary>
+    /// One row per calendar day (local time) with totals - lets you check
+    /// yesterday, or scan/sort across several days, instead of only ever
+    /// seeing "Today" and "This week" aggregates.
+    /// </summary>
+    private void DrawDailyBreakdownSection()
+    {
+        var headerOpen = ImGui.CollapsingHeader("Daily Breakdown");
+        HelpMarker("One row per calendar day with totals for that day only - use this to check yesterday, or sort/compare across several days. \"Today\"/\"This week\" above only ever show the current day/week.");
+
+        if (!headerOpen)
+            return;
+
+        if (this.cachedDailyBreakdown.Count == 0)
+        {
+            ImGui.TextDisabled("No completed duties logged yet.");
+            return;
+        }
+
+        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
+            | ImGuiTableFlags.ScrollY | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Sortable;
+
+        var tableHeight = Math.Min(220, 32 * (this.cachedDailyBreakdown.Count + 1));
+
+        if (!ImGui.BeginTable("##daily_breakdown", 6, flags, new Vector2(0, tableHeight)))
+            return;
+
+        ImGui.TableSetupColumn("Date", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Duties", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Time", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Tomestones", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Clear rate", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableHeadersRow();
+
+        var sortSpecs = ImGui.TableGetSortSpecs();
+        if (sortSpecs.SpecsDirty && sortSpecs.SpecsCount > 0)
+        {
+            var spec = sortSpecs.Specs;
+            this.daySortColumn = spec.ColumnIndex;
+            this.daySortAscending = spec.SortDirection == ImGuiSortDirection.Ascending;
+            sortSpecs.SpecsDirty = false;
+        }
+
+        var rows = this.daySortAscending
+            ? this.cachedDailyBreakdown.OrderBy(x => DailyBreakdownSortKey(x, this.daySortColumn)).ToList()
+            : this.cachedDailyBreakdown.OrderByDescending(x => DailyBreakdownSortKey(x, this.daySortColumn)).ToList();
+
+        var today = DateOnly.FromDateTime(DateTime.Now.Date);
+        var yesterday = today.AddDays(-1);
+
+        foreach (var d in rows)
+        {
+            ImGui.TableNextRow();
+
+            ImGui.TableNextColumn();
+            var dateLabel = d.Date == today ? $"{d.Date:yyyy-MM-dd} (today)" : d.Date == yesterday ? $"{d.Date:yyyy-MM-dd} (yesterday)" : d.Date.ToString("yyyy-MM-dd");
+            if (d.Date == today || d.Date == yesterday)
+                ImGui.TextColored(this.ColorAccent, dateLabel);
+            else
+                ImGui.TextUnformatted(dateLabel);
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(d.Duties.ToString());
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(Format(d.TotalTime));
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted($"{d.TotalGil:N0}");
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted($"{d.TotalTomestones:N0}");
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted($"{d.ClearRatePercent:0}%");
+        }
+
+        ImGui.EndTable();
     }
 
     /// <summary>Maps a Duty Averages column index to the field used to order by it. Only called for the non-NoSort columns.</summary>
