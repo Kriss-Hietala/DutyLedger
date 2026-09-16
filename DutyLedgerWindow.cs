@@ -2,11 +2,14 @@
 // ImGui window for the DutyLedger plugin: cap warnings, stats, a sortable
 // day-by-day breakdown, averages per duty, queue-time averages, filterable
 // table with bonus/loot badges, CSV export, an independently-collapsible
-// daily activity chart, and an independently-collapsible roulette-category
-// breakdown chart (ImPlot).
-// Both charts use a dynamic Y-axis tick step (1/2/5/10/20/25/50/...) picked
-// to keep roughly 4-8 labeled ticks regardless of how tall the tallest bar
-// is, instead of always labeling every single integer.
+// "this week vs last week" activity chart, and an independently-collapsible
+// roulette-category breakdown chart (ImPlot).
+// The weekday chart intentionally compares only the current and previous
+// week (not an all-time sum per weekday) - an all-time total per weekday is
+// rarely actionable, whereas "am I doing more or less than last week" is.
+// The category chart uses a dynamic Y-axis tick step (1/2/5/10/20/25/50/...)
+// picked to keep roughly 4-8 labeled ticks regardless of how tall the
+// tallest bar is, instead of always labeling every single integer.
 // All tables (duty log, Daily Breakdown, Duty Averages, Queue Times)
 // support real click-to-sort on their headers via ImGui.TableGetSortSpecs();
 // the main table's "Sort by" dropdown is just a shortcut that sets the same
@@ -15,9 +18,11 @@
 // meaningful ordering for them.
 // Verbose static explanations live behind small "(?)" hover markers instead
 // of always-visible paragraphs, so the window stays scannable.
-// Averages/chart/queue/daily data are cached and only recomputed when their
-// respective list counts change; per-table sort state is separate from that
-// cache and just re-orders a local copy each frame (these lists are small).
+// Averages/category/queue/daily data are cached and only recomputed when
+// their respective list counts change; per-table sort state is separate
+// from that cache and just re-orders a local copy each frame (these lists
+// are small). The this-week/last-week counts are cheap enough to recompute
+// every frame (same as the existing Today/This week text stats already do).
 
 using System;
 using System.Collections.Generic;
@@ -99,7 +104,6 @@ public sealed class DutyLedgerWindow : Window
 
     private int cachedEntryCount = -1;
     private List<AverageRow> cachedAverages = [];
-    private double[] cachedDailyCounts = new double[7];
     private List<CategoryRow> cachedCategoryCounts = [];
     private List<DailyBreakdownRow> cachedDailyBreakdown = [];
 
@@ -203,11 +207,6 @@ public sealed class DutyLedgerWindow : Window
                     g.Count(x => x.AdventurerInNeedBonus)))
                 .OrderByDescending(x => x.Runs)
                 .ToList();
-
-            var dailyCounts = new double[7];
-            foreach (var e in this.config.Entries)
-                dailyCounts[((int)e.StartedAt.LocalDateTime.DayOfWeek + 6) % 7]++;
-            this.cachedDailyCounts = dailyCounts;
 
             this.cachedCategoryCounts = this.config.Entries
                 .GroupBy(x => NormalizeCategory(x.RouletteTag))
@@ -314,10 +313,10 @@ public sealed class DutyLedgerWindow : Window
 
         ImGui.Spacing();
 
-        if (ImGui.CollapsingHeader("Duties per day of the week", ImGuiTreeNodeFlags.DefaultOpen))
+        if (ImGui.CollapsingHeader("This week vs last week", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            HelpMarker("Total duties completed on each weekday, across your entire history (not just this week).");
-            this.DrawDailyChart();
+            HelpMarker("Duties per weekday, current week vs the previous week (both Mon-Sun, local time) - shows whether you're doing more or less than last week, not an all-time total per weekday.");
+            this.DrawWeekComparisonChart(weekStart);
         }
 
         if (ImGui.CollapsingHeader("Instances by roulette category", ImGuiTreeNodeFlags.DefaultOpen))
@@ -354,8 +353,15 @@ public sealed class DutyLedgerWindow : Window
         return (ticks, labels);
     }
 
-    /// <summary>Simple total duty count per weekday - one aggregate series, which is fine on its own (this chart is about activity volume, not outcome).</summary>
-    private void DrawDailyChart()
+    /// <summary>
+    /// Grouped bars: current week (Mon-Sun, starting at <paramref name="thisWeekStart"/>) next to the
+    /// same weekdays of the previous week, so you can see at a glance whether
+    /// you're up or down versus last week - a plain all-time sum per weekday
+    /// told you nothing actionable, since it never changes week to week.
+    /// Cheap enough to recompute every frame (same as the Today/This week
+    /// text stats above already do), no caching needed.
+    /// </summary>
+    private void DrawWeekComparisonChart(DateTime thisWeekStart)
     {
         if (this.config.Entries.Count == 0)
         {
@@ -363,15 +369,30 @@ public sealed class DutyLedgerWindow : Window
             return;
         }
 
-        var counts = this.cachedDailyCounts;
-        var dayLabels = new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
-        var positions = Enumerable.Range(0, 7).Select(i => (double)i).ToArray();
+        var lastWeekStart = thisWeekStart.AddDays(-7);
 
-        var maxCount = Math.Max(1, (int)Math.Ceiling(counts.Max()));
+        var thisWeekCounts = new double[7];
+        var lastWeekCounts = new double[7];
+
+        foreach (var e in this.config.Entries)
+        {
+            var date = e.StartedAt.LocalDateTime.Date;
+
+            if (date >= thisWeekStart && date < thisWeekStart.AddDays(7))
+                thisWeekCounts[(date - thisWeekStart).Days]++;
+            else if (date >= lastWeekStart && date < lastWeekStart.AddDays(7))
+                lastWeekCounts[(date - lastWeekStart).Days]++;
+        }
+
+        var dayLabels = new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+        var thisWeekPositions = Enumerable.Range(0, 7).Select(i => (double)i - 0.2).ToArray();
+        var lastWeekPositions = Enumerable.Range(0, 7).Select(i => (double)i + 0.2).ToArray();
+
+        var maxCount = Math.Max(1, (int)Math.Ceiling(Math.Max(thisWeekCounts.Max(), lastWeekCounts.Max())));
         var (yTicks, yLabels) = BuildYAxisTicks(maxCount);
         var yTop = yTicks[^1];
 
-        if (ImPlot.BeginPlot("##daily_duty_chart", new Vector2(-1, this.config.ChartHeight), ImPlotFlags.NoLegend))
+        if (ImPlot.BeginPlot("##week_comparison_chart", new Vector2(-1, this.config.ChartHeight)))
         {
             ImPlot.SetupAxes(string.Empty, string.Empty);
             ImPlot.SetupAxisTicks(ImAxis.X1, 0, 6, 7, dayLabels);
@@ -379,7 +400,10 @@ public sealed class DutyLedgerWindow : Window
             ImPlot.SetupAxisLimits(ImAxis.Y1, 0, yTop, ImPlotCond.Always);
 
             ImPlot.SetNextFillStyle(this.ColorAccent);
-            ImPlot.PlotBars("Duties", ref positions[0], ref counts[0], counts.Length, 0.6);
+            ImPlot.PlotBars("This week", ref thisWeekPositions[0], ref thisWeekCounts[0], thisWeekCounts.Length, 0.35);
+
+            ImPlot.SetNextFillStyle(this.ColorMuted);
+            ImPlot.PlotBars("Last week", ref lastWeekPositions[0], ref lastWeekCounts[0], lastWeekCounts.Length, 0.35);
 
             ImPlot.EndPlot();
         }
